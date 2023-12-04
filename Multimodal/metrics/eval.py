@@ -33,8 +33,12 @@ def calculate_metrics(nets, args, step, mode):
     num_domains = len(domains)
     print('Number of domains: %d' % num_domains)
 
+    # calculate and report fid values
+    
     lpips_dict = OrderedDict()
     for trg_idx, trg_domain in enumerate(domains):
+        if trg_domain != "testB":
+            continue
         src_domains = [x for x in domains if x != trg_domain]
 
         if mode == 'reference':
@@ -47,10 +51,14 @@ def calculate_metrics(nets, args, step, mode):
 
         for src_idx, src_domain in enumerate(src_domains):
             path_src = os.path.join(args.val_img_dir, src_domain)
-            loader_src = get_eval_loader(root=path_src,
-                                         img_size=args.img_size,
-                                         batch_size=args.val_batch_size,
-                                         imagenet_normalize=False)
+            try:
+                loader_src = get_eval_loader(root=path_src,
+                                            img_size=args.img_size,
+                                            batch_size=args.val_batch_size,
+                                            imagenet_normalize=False)
+            except:
+                print(path_src)
+                exit()
 
             task = '%s2%s' % (src_domain, trg_domain)
             path_fake = os.path.join(args.eval_dir, task)
@@ -91,7 +99,7 @@ def calculate_metrics(nets, args, step, mode):
                             path_fake,
                             '%.4i_%.2i.png' % (i*args.val_batch_size+(k+1), j+1))
                         utils.save_image(x_fake[k], ncol=1, filename=filename)
-
+                print(len(group_of_images))
                 lpips_value = calculate_lpips_given_images(group_of_images)
                 lpips_values.append(lpips_value)
 
@@ -111,24 +119,28 @@ def calculate_metrics(nets, args, step, mode):
         lpips_mean += value / len(lpips_dict)
     lpips_dict['LPIPS_%s/mean' % mode] = lpips_mean
 
+    fid_mean = calculate_fid_for_all_tasks(args, domains, step=step, mode=mode)
+
     # report LPIPS values
     filename = os.path.join(args.eval_dir, 'LPIPS_%.5i_%s.json' % (step, mode))
     utils.save_json(lpips_dict, filename)
 
-    # calculate and report fid values
-    calculate_fid_for_all_tasks(args, domains, step=step, mode=mode)
+    return lpips_mean, fid_mean
 
 
 def calculate_fid_for_all_tasks(args, domains, step, mode):
     print('Calculating FID for all tasks...')
     fid_values = OrderedDict()
     for trg_domain in domains:
+        if trg_domain != "testB":
+            continue
         src_domains = [x for x in domains if x != trg_domain]
 
         for src_domain in src_domains:
             task = '%s2%s' % (src_domain, trg_domain)
             path_real = os.path.join(args.train_img_dir, trg_domain)
             path_fake = os.path.join(args.eval_dir, task)
+            print(path_real, path_fake)
             print('Calculating FID for %s...' % task)
             fid_value = calculate_fid_given_paths(
                 paths=[path_real, path_fake],
@@ -145,3 +157,4 @@ def calculate_fid_for_all_tasks(args, domains, step, mode):
     # report FID values
     filename = os.path.join(args.eval_dir, 'FID_%.5i_%s.json' % (step, mode))
     utils.save_json(fid_values, filename)
+    return fid_mean

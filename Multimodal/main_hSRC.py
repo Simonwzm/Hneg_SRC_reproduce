@@ -8,6 +8,8 @@ import torch
 from core.data_loader import get_train_loader
 from core.data_loader import get_test_loader
 from core.solver_hSRC import Solver
+import wandb
+
 
 def str2bool(v):
     return v.lower() in ('true')
@@ -43,7 +45,7 @@ def main(args):
                         val=get_test_loader(root=args.val_img_dir,
                                             img_size=args.img_size,
                                             batch_size=args.val_batch_size,
-                                            shuffle=True,
+                                            shuffle=False,
                                             num_workers=args.num_workers))
         solver.train(loaders)
     elif args.mode == 'sample':
@@ -97,7 +99,7 @@ if __name__ == '__main__':
                         help='Weight for src')
     parser.add_argument('--lambda_dce', type=float, default=1.0,
                         help='Weight for dce')
-    parser.add_argument('--lambda_nce', type=float, default=0.0,
+    parser.add_argument('--lambda_nce', type=float, default=0.5,
                         help='Weight for nce')
     parser.add_argument('--gamma_start', type=float, default=50.0,
                         help='start gamma')
@@ -117,12 +119,14 @@ if __name__ == '__main__':
                         help='Number of total iterations')
     parser.add_argument('--resume_iter', type=int, default=0,
                         help='Iterations to resume training/testing')
-    parser.add_argument('--batch_size', type=int, default=8,
+    parser.add_argument('--batch_size', type=int, default=4,
                         help='Batch size for training')
-    parser.add_argument('--val_batch_size', type=int, default=32,
+    parser.add_argument('--val_batch_size', type=int, default=8,
                         help='Batch size for validation')
     parser.add_argument('--lr', type=float, default=1e-4,
-                        help='Learning rate for D, E and G')
+                        help='Learning rate for  E and G')
+    parser.add_argument('--d_lr', type=float, default=1e-5,
+                        help='Learning rate for D')
     parser.add_argument('--f_lr', type=float, default=1e-6,
                         help='Learning rate for F')
     parser.add_argument('--beta1', type=float, default=0.0,
@@ -176,9 +180,27 @@ if __name__ == '__main__':
 
     # step size
     parser.add_argument('--print_every', type=int, default=10)
-    parser.add_argument('--sample_every', type=int, default=1000)
-    parser.add_argument('--save_every', type=int, default=10000)
-    parser.add_argument('--eval_every', type=int, default=100000)
+    parser.add_argument('--sample_every', type=int, default=80)
+    parser.add_argument('--save_every', type=int, default=100)
+    parser.add_argument('--eval_every', type=int, default=100)
 
+    parser.add_argument('--name', type=str, default="test0")
+    parser.add_argument('--project_name', type=str, default="project_SRC")
     args = parser.parse_args()
+    # create_dict = vars(args)
+    # print(create_dict)
+    create_dict = {
+        "batch_size": args.batch_size,
+        "learning_rate": args.lr,
+        "d_learning_rate": args.d_lr,
+        "num_domains": args.num_domains,
+        "latent_dim": args.latent_dim,
+        "hidden_dim": args.hidden_dim,
+        "style_dim": args.style_dim,
+        "n_patch": args.n_patch,
+        "weight_decay": args.weight_decay,
+    }
+
+    # hparm = vars(args)
+    wandb.init(project=args.project_name, config=create_dict, name= args.name) 
     main(args)

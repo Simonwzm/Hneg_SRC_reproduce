@@ -66,6 +66,7 @@ def translate_and_reconstruct(nets, args, x_src, y_src, x_ref, y_ref, filename):
 
 @torch.no_grad()
 def translate_using_latent(nets, args, x_src, y_trg_list, z_trg_list, psi, filename):
+    return_list = []
     N, C, H, W = x_src.size()
     latent_dim = z_trg_list[0].size(1)
     x_concat = [x_src]
@@ -77,15 +78,21 @@ def translate_using_latent(nets, args, x_src, y_trg_list, z_trg_list, psi, filen
         s_many = nets.mapping_network(z_many, y_many)
         s_avg = torch.mean(s_many, dim=0, keepdim=True)
         s_avg = s_avg.repeat(N, 1)
-
+        j = 0
         for z_trg in z_trg_list:
             s_trg = nets.mapping_network(z_trg, y_trg)
             s_trg = torch.lerp(s_avg, s_trg, psi)
             x_fake = nets.generator(x_src, s_trg, masks=masks)
             x_concat += [x_fake]
+            if j==0:
+                x_src_copy = x_src.clone().detach().cpu()
+                x_fake_copy = x_fake.clone().detach().cpu()
+                return_list.append((denormalize(x_src_copy), denormalize(x_fake_copy)))
+            j = j+1
 
     x_concat = torch.cat(x_concat, dim=0)
     save_image(x_concat, N, filename)
+    return return_list
 
 
 @torch.no_grad()
@@ -110,6 +117,7 @@ def translate_using_reference(nets, args, x_src, x_ref, y_ref, filename):
 
 @torch.no_grad()
 def debug_image(nets, args, inputs, step):
+    
     x_src, y_src = inputs.x_src, inputs.y_src
     x_ref, y_ref = inputs.x_ref, inputs.y_ref
 
@@ -124,13 +132,17 @@ def debug_image(nets, args, inputs, step):
     y_trg_list = [torch.tensor(y).repeat(N).to(device)
                   for y in range(min(args.num_domains, 5))]
     z_trg_list = torch.randn(args.num_outs_per_domain, 1, args.latent_dim).repeat(1, N, 1).to(device)
-    for psi in [0.5, 0.7, 1.0]:
+    # for psi in [0.5, 0.7, 1.0]:
+    for psi in [1.0]:
         filename = ospj(args.sample_dir, '%06d_latent_psi_%.1f.jpg' % (step, psi))
-        translate_using_latent(nets, args, x_src, y_trg_list, z_trg_list, psi, filename)
+        return_list = translate_using_latent(nets, args, x_src, y_trg_list, z_trg_list, psi, filename)
+    
 
     # reference-guided image synthesis
-    filename = ospj(args.sample_dir, '%06d_reference.jpg' % (step))
-    translate_using_reference(nets, args, x_src, x_ref, y_ref, filename)
+    # no longer support, unless input dataset has sampler from _make_balanced_dataset()
+    # filename = ospj(args.sample_dir, '%06d_reference.jpg' % (step))
+    # translate_using_reference(nets, args, x_src, x_ref, y_ref, filename)
+    return return_list
 
 
 # ======================= #

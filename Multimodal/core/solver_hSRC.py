@@ -14,6 +14,8 @@ from core.data_loader import InputFetcher
 import core.utils as utils
 from metrics.eval import calculate_metrics
 from core.contra_loss import PatchDCELoss,PatchNCELoss,SRC_Loss
+import wandb
+from tqdm.auto import tqdm
 
 
 class Normalize(nn.Module):
@@ -49,16 +51,25 @@ class Solver(nn.Module):
             for net in self.nets.keys():
                 if net == 'fan':
                     continue
+                if net=="generator":
+                    lr = args.lr
+                elif net=="discriminator":
+                    lr = args.d_lr
+                elif net =="mapping_network":
+                    lr = args.f_lr
+                else:
+                    lr = args.lr
+        
                 self.optims[net] = torch.optim.Adam(
                     params=self.nets[net].parameters(),
-                    lr=args.f_lr if net == 'mapping_network' else args.lr,
+                    lr = lr,
                     betas=[args.beta1, args.beta2],
                     weight_decay=args.weight_decay)
 
             self.ckptios = [
-                CheckpointIO(ospj(args.checkpoint_dir, '{:06d}_nets.ckpt'), data_parallel=True, **self.nets),
-                CheckpointIO(ospj(args.checkpoint_dir, '{:06d}_nets_ema.ckpt'), data_parallel=True, **self.nets_ema),
-                CheckpointIO(ospj(args.checkpoint_dir, '{:06d}_optims.ckpt'), **self.optims)]
+                CheckpointIO(args.checkpoint_dir+ './{:06d}_nets.ckpt', data_parallel=True, **self.nets),
+                CheckpointIO(args.checkpoint_dir+ './{:06d}_nets_ema.ckpt', data_parallel=True, **self.nets_ema),
+                CheckpointIO(args.checkpoint_dir+ './{:06d}_optims.ckpt', **self.optims)]
         else:
             self.ckptios = [CheckpointIO(ospj(args.checkpoint_dir, '{:06d}_nets_ema.ckpt'), data_parallel=True, **self.nets_ema)]
 
@@ -82,6 +93,8 @@ class Solver(nn.Module):
             optim.zero_grad()
 
     def train(self, loaders):
+        wandb.watch(self.nets.generator, log="all", log_freq=500)
+        wandb.watch(self.nets.mapping_network, log="all", log_freq=500)
         args = self.args
         nets = self.nets
         nets_ema = self.nets_ema
@@ -110,7 +123,7 @@ class Solver(nn.Module):
 
         print('Start training...')
         start_time = time.time()
-        for i in range(args.resume_iter, args.total_iters):
+        for i in tqdm(range(args.resume_iter, args.total_iters)):
             # fetch images and labels
             inputs = next(fetcher)
             
@@ -123,12 +136,19 @@ class Solver(nn.Module):
             # train the discriminator
             d_loss, d_losses_latent = compute_d_loss(
                 nets, args, x_real, y_org, y_trg, z_trg=z_trg, masks=masks)
+            wandb.log({"latent_d_loss":d_loss})
+            # print("d_loss1: ",d_loss)
+            # print("d_losses_latent: ",d_losses_latent)
+
             self._reset_grad()
             d_loss.backward()
             optims.discriminator.step()
 
             d_loss, d_losses_ref = compute_d_loss(
                 nets, args, x_real, y_org, y_trg, x_ref=x_ref, masks=masks)
+            
+            wandb.log({"ref_d_loss":d_loss})
+            # print("d_losses_ref: ",d_losses_ref)
             self._reset_grad()
             d_loss.backward()
             optims.discriminator.step()
@@ -136,6 +156,9 @@ class Solver(nn.Module):
             # train the generator
             g_loss, g_losses_latent = compute_g_loss(
                 nets, args, x_real, y_org, y_trg, z_trgs=[z_trg, z_trg2], masks=masks,srcloss=srcloss,patchloss=patchloss,iters=i)
+            wandb.log({"latent_g_loss":g_loss})
+            # print("g_loss1: ",g_loss)
+            # print("g_losses_latent: ",g_losses_latent)
             self._reset_grad()
             g_loss.backward()
             optims.generator.step()
@@ -145,6 +168,9 @@ class Solver(nn.Module):
 
             g_loss, g_losses_ref = compute_g_loss(
                 nets, args, x_real, y_org, y_trg, x_refs=[x_ref, x_ref2], masks=masks,srcloss=srcloss,patchloss=patchloss,iters=i)
+            wandb.log({"ref_g_loss":g_loss})
+            # print("g_loss2: ",g_loss)
+            # print("g_losses_ref: ",g_losses_ref)
             self._reset_grad()
             g_loss.backward()
             optims.generator.step()
@@ -175,7 +201,10 @@ class Solver(nn.Module):
             # generate images for debugging
             if (i+1) % args.sample_every == 0:
                 os.makedirs(args.sample_dir, exist_ok=True)
-                utils.debug_image(nets_ema, args, inputs=inputs_val, step=i+1)
+                return_list = utils.debug_image(nets_ema, args, inputs=inputs_val, step=i+1)
+                print(return_list[0][0].size())
+                print(return_list[0][1].size())
+                upload_to_wandb(return_list,step=i+1)
 
             # save model checkpoints
             if (i+1) % args.save_every == 0:
@@ -183,8 +212,10 @@ class Solver(nn.Module):
 
             # compute FID and LPIPS if necessary
             if (i+1) % args.eval_every == 0:
-                calculate_metrics(nets_ema, args, i+1, mode='latent')
-                calculate_metrics(nets_ema, args, i+1, mode='reference')
+                lpips_mean, fid_mean = calculate_metrics(nets_ema, args, i+1, mode='latent')
+                wandb.log({"lpips_mean":lpips_mean})
+                wandb.log({"fid_mean":fid_mean})
+                # calculate_metrics(nets_ema, args, i+1, mode='reference')
 
     @torch.no_grad()
     def sample(self, loaders):
@@ -328,3 +359,9 @@ def r1_reg(d_out, x_in):
     reg = 0.5 * grad_dout2.view(batch_size, -1).sum(1).mean(0)
     return reg
     
+
+def upload_to_wandb(img_list, step):
+    for src, trans in img_list:
+        # upload src_img and translated_image
+        wandb.log({"src_img":wandb.Image(src, caption="source image")})
+        wandb.log({"translated_img": wandb.Image(trans, caption="translated image")})

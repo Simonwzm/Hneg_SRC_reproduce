@@ -2,3 +2,5 @@
 /Single-modal
 /Multimodal/data
 /Multimodal/expr
+/Multimodal/wandb
+/Multimodal/.vscode/
